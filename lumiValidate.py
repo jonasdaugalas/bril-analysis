@@ -103,7 +103,7 @@ def main():
         lumi_plot = fig.add_subplot(rows, 1, 1)
         make_lumi_plot(lumi_plot, data, cols, timerange, args.single_bunch)
         ratios_plot = fig.add_subplot(rows, 1, 2)
-        make_ratio_plot(ratios_plot, data, cols, timerange)
+        make_ratio_plot(ratios_plot, data, cols, timerange, args.primary)
 
     if args.outfile is not None:
         log.info('printing data to file %s', args.outfile)
@@ -153,6 +153,11 @@ def predefined_arg_parser():
         '-t', dest='threshold', type=float, default=0.4,
         help='values < max*threshold are not included in plots (this option'
         ' applies for bunch plots (--xing) only). Default: 0.4')
+    parser.add_argument(
+        '--primary', dest='primary', metavar='type/normtag', type=str,
+        nargs='+', default=[],
+        help='list of space-delimited primary luminometer. If specified, '
+        'only ratios to at least one primary luminometer will be shown')
     return parser
 
 # ---------
@@ -381,8 +386,8 @@ def make_lumi_plot(plot, data, cols, timerange, single_bunch=None):
     auto_separate_chunks_on_plot(plot, data, timerange)
 
 
-def make_ratio_plot(plot, data, cols, timerange):
-    ratios = calculate_ratios(data, cols)
+def make_ratio_plot(plot, data, cols, timerange, primary_luminometers=[]):
+    ratios = calculate_ratios(data, cols, primary_luminometers)
     log.info('creating ratios plot')
     plot_by_columns(plot, data, ratios)
     plot.set_title('Lumi ratios')
@@ -461,13 +466,15 @@ def plot_by_columns(subplot, data, cols, special=None, legend=True):
     pyplot.setp(subplot.xaxis.get_majorticklabels(), rotation=90)
 
 
-def calculate_ratios(data, cols):
+def calculate_ratios(data, cols, primary_luminometers=[]):
     '''Update DataFrame 'data' with ratios'''
     log.info('calculating ratios')
     # back up numpy settings and set to ignore all errors (to handle
     # 'None's and division by zero)
     old_numpy_settings = numpy.seterr(all='ignore')
     comparables = [x for x in cols if x != 'online']
+    if len(primary_luminometers):
+        comparables = [x for x in comparables if x in primary_luminometers]
     calculated_ratios = []
     for above_idx, above in enumerate(comparables):
         for below in comparables[above_idx + 1:]:
