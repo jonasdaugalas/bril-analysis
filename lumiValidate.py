@@ -19,20 +19,21 @@ LUMI_TOP_YLIMIT = 11000
 LUMI_BOTTOM_YLIMIT = 0
 # default figure size (tuple) in inches
 FIGURE_SIZE = (14, 11)
+LUMI_UNIT = 'hz/ub'
 
 # (Jonas): tight_layout would be way better, but it does not handle
 # legends outside plots, so we have to do the following manual adjustments:
 # adjust for figuresize depending on layout (also keeping in mind
 # rotated xaxis ticks)
 FIGURE_ADJUSTS_TWO_FAT_ROWS = {
-    'top': 0.96, 'left': 0.06, 'right': 0.85, 'bottom': 0.15, 'hspace': 0.55}
+    'top': 0.94, 'left': 0.07, 'right': 0.85, 'bottom': 0.15, 'hspace': 0.55}
 FIGURE_ADJUSTS_TWO_FAT_ONE_SLIM_ROWS = {
-    'top': 0.96, 'left': 0.06, 'right': 0.85, 'bottom': 0.04, 'hspace': 0.75}
+    'top': 0.94, 'left': 0.07, 'right': 0.85, 'bottom': 0.04, 'hspace': 0.80}
 XAXIS_TICKS_MAX = 40
 SPECIAL_COLOR1 = '#FF0000'
 BG_STRIPE_ALPHA = 0.1
 BG_STRIPE_COLOR = '#0000FF'
-COLORS = itertools.cycle([
+COLOR_LIST = [
     '#000000', '#00FF00', '#0000FF', '#01FFFE', '#FFA6FE', '#FFDB66',
     '#006401', '#010067', '#95003A', '#007DB5', '#FF00F6', '#774D00',
     '#90FB92', '#0076FF', '#D5FF00', '#FF937E', '#6A826C', '#FF029D',
@@ -43,25 +44,16 @@ COLORS = itertools.cycle([
     '#BB8800', '#43002C', '#DEFF74', '#00FFC6', '#FFE502', '#620E00',
     '#008F9C', '#98FF52', '#7544B1', '#B500FF', '#00FF78', '#FF6E41',
     '#005F39', '#6B6882', '#5FAD4E', '#A75740', '#A5FFD2', '#FFB167',
-    '#009BFF', '#E85EBE'])
+    '#009BFF', '#E85EBE'
+]
+COLORS = itertools.cycle(COLOR_LIST)
 
 
 def main():
     parser = predefined_arg_parser()
     log.info('parsing main arguments')
     args = parser.parse_args()
-    timerange = {}
-    if args.run is not None:
-        timerange['run'] = args.run
-    elif args.fill is not None:
-        timerange['fill'] = args.fill
-    elif args.input_select is not None:
-        timerange['input_select'] = args.input_select
-    elif args.begin is not None and args.end is not None:
-        timerange['begin'] = args.begin
-        timerange['end'] = args.end
-    else:
-        raise ValueError('Either run, fill or begin+end must by specified')
+    timerange = parse_timerange_args(args)
     types = args.types
     if len(args.normtags) == 0 and len(args.types) == 0:
         types = ['hfoc', 'bcm1f', 'pltzero', 'online']
@@ -73,18 +65,20 @@ def main():
         ltype = args.types[0] if args.types else None
         normtag = args.normtags[0] if args.normtags else None
         data, bxd_cols, name = get_bunch_data(
-            timerange, ltype, normtag, args.beams)
+            timerange, ltype, normtag, args.beams, unit=LUMI_UNIT)
         if data is None:
             raise RuntimeError('Could not get data')
-        make_bunch_plot(plot, data, bxd_cols, timerange, name, args.threshold)
+        make_bunch_plot(plot, data, bxd_cols, timerange, name, args.threshold,
+                        unit=LUMI_UNIT)
         fig.tight_layout()
     else:
         if args.single_bunch is not None:
             data, cols = get_single_bunch_data(
-                timerange, args.single_bunch, types, args.normtags, args.beams)
+                timerange, args.single_bunch, types, args.normtags, args.beams,
+                unit=LUMI_UNIT)
         else:
             data, cols = get_avg_data(
-                timerange, types, args.normtags, args.beams)
+                timerange, types, args.normtags, args.beams, unit=LUMI_UNIT)
         if data is None:
             raise RuntimeError('Could not get data')
         fig.subplots_adjust(**FIGURE_ADJUSTS_TWO_FAT_ROWS)
@@ -101,7 +95,8 @@ def main():
                 log.error('no data for {} or/and {}: cannot make'
                           ' correlation plot'.format(x, y))
         lumi_plot = fig.add_subplot(rows, 1, 1)
-        make_lumi_plot(lumi_plot, data, cols, timerange, args.single_bunch)
+        make_lumi_plot(lumi_plot, data, cols, timerange, unit=LUMI_UNIT,
+                       single_bunch=args.single_bunch)
         ratios_plot = fig.add_subplot(rows, 1, 2)
         make_ratio_plot(ratios_plot, data, cols, timerange, args.primary)
 
@@ -160,12 +155,30 @@ def predefined_arg_parser():
         'only ratios to at least one primary luminometer will be shown')
     return parser
 
+
+def parse_timerange_args(args):
+    timerange = {}
+    if args.run is not None:
+        timerange['run'] = args.run
+    elif args.fill is not None:
+        timerange['fill'] = args.fill
+    elif args.input_select is not None:
+        timerange['input_select'] = args.input_select
+    elif args.begin is not None and args.end is not None:
+        timerange['begin'] = args.begin
+        timerange['end'] = args.end
+    else:
+        raise ValueError('Either run, fill or begin+end must by specified')
+    return timerange
+
 # ---------
 # retrieving and preparing data
 # ---vvv---
 
 
-def get_avg_data(timerange, types=[], normtags=[], beam_selector=None):
+def get_avg_data(timerange, types=[], normtags=[], beam_selector=None,
+                 unit='hz/ub', merge_how='outer'):
+
     log.info('get avg data')
     found_columns = []
     merged = None
@@ -180,20 +193,22 @@ def get_avg_data(timerange, types=[], normtags=[], beam_selector=None):
                 log.info('normtag is file: %s', request)
                 request = 'normtag'
 
-        data = call_brilcalc(timerange, beam_selector, options)
+        data = call_brilcalc(timerange, options, beam_selector=beam_selector,
+                             unit=unit)
         if data is None:
             log.error('Failed fetching data for {}. Skipping'.format(request))
             continue
         found_columns.append(request)
 
-        data['delivered(hz/ub)'] = data['delivered(hz/ub)'].map(float)
-        data.rename(columns={'delivered(hz/ub)': request}, inplace=True)
+        value_field_name = 'delivered(' + unit + ')'
+        data[value_field_name] = data[value_field_name].map(float)
+        data.rename(columns={value_field_name: request}, inplace=True)
         data = data.loc[:, ('#run:fill', 'ls', request)]
 
         if merged is None:
             merged = data
         else:
-            merged = pandas.merge(merged, data, how='outer',
+            merged = pandas.merge(merged, data, how=merge_how,
                                   on=['#run:fill', 'ls'])
 
     merged = format_dataframe(merged)
@@ -202,7 +217,8 @@ def get_avg_data(timerange, types=[], normtags=[], beam_selector=None):
 
 
 def get_single_bunch_data(
-        timerange, bxid, types=[], normtags=[], beam_selector=None):
+        timerange, bxid, types=[], normtags=[], beam_selector=None,
+        unit='hz/ub', merge_how='outer'):
     log.info('get single bunch data')
     found_columns = []
     merged = None
@@ -222,10 +238,12 @@ def get_single_bunch_data(
 
         if request in types:
             data, cols, name = get_bunch_data(
-                timerange, request, None, beam_selector, bx_to_col_fn)
+                timerange, request, None, beam_selector, bx_to_col_fn,
+                unit=unit)
         elif request in normtags:
             data, cols, name = get_bunch_data(
-                timerange, None, request, beam_selector, bx_to_col_fn)
+                timerange, None, request, beam_selector, bx_to_col_fn,
+                unit=unit)
         if data is None:
             log.error('Failed fetching data for {}. Skipping'.format(request))
             continue
@@ -234,7 +252,7 @@ def get_single_bunch_data(
         if merged is None:
             merged = data
         else:
-            merged = pandas.merge(merged, data, how='outer',
+            merged = pandas.merge(merged, data, how=merge_how,
                                   on=['fill', 'run', 'ls'])
 
     log.info('sucessfully got data')
@@ -253,8 +271,8 @@ def format_dataframe(data):
     return data
 
 
-def call_brilcalc(timerange, beam_selector, options):
-    cmd = make_brilcalc_call_template(timerange, beam_selector)
+def call_brilcalc(timerange, options, beam_selector=None, unit='hz/ub'):
+    cmd = make_brilcalc_call_template(timerange, beam_selector, unit)
     cmd += options
     f = tempfile.NamedTemporaryFile()
     log.debug('temp file name: %s', f.name)
@@ -298,8 +316,8 @@ def all_bx_to_cols(row):
     return pandas.Series(data=delivereds, index=cols)
 
 
-def get_bunch_data(timerange, ltype=None, normtag=None,
-                   beam_selector=None, bx_to_cols_fn=all_bx_to_cols):
+def get_bunch_data(timerange, ltype=None, normtag=None, beam_selector=None,
+                   bx_to_cols_fn=all_bx_to_cols, unit='hz/ub'):
     log.info('get all bunch data')
     name = 'online'
     options = ['--xing']
@@ -313,13 +331,13 @@ def get_bunch_data(timerange, ltype=None, normtag=None,
         if os.path.isfile(name):
             log.info('normtag is file: {}'.format(name))
             name = os.path.basename(name)
-    data = call_brilcalc(timerange, beam_selector, options)
+    data = call_brilcalc(timerange, options, beam_selector=None)
     if data is None:
         log.error('Failed fetching data for {} bunches'.format(name))
         return None, None, None
 
-    data.rename(inplace=True, columns={
-        '[bxidx bxdelivered(hz/ub) bxrecorded(hz/ub)]': 'bunches'})
+    bx_col_name = '[bxidx bxdelivered(' + unit + ') bxrecorded(' + unit + ')]'
+    data.rename(inplace=True, columns={bx_col_name: 'bunches'})
     data = data.loc[:, ('#run:fill', 'ls', 'bunches')]
     data = format_dataframe(data)
 
@@ -331,7 +349,7 @@ def get_bunch_data(timerange, ltype=None, normtag=None,
     return data, bxd_cols, name
 
 
-def make_brilcalc_call_template(timerange, beam_selector=None):
+def make_brilcalc_call_template(timerange, beam_selector=None, unit='hz/ub'):
     if timerange is None:
         raise ValueError('timerange cannot be None')
     time_selection = None
@@ -348,7 +366,7 @@ def make_brilcalc_call_template(timerange, beam_selector=None):
         raise ValueError(
             'Either run, fill, begin+end, or input json must by specified')
 
-    cmd = ['brilcalc', 'lumi', '--byls', '-u', 'hz/ub']
+    cmd = ['brilcalc', 'lumi', '--byls', '-u', unit]
     cmd += time_selection
     if beam_selector is not None:
         cmd += ['-b', beam_selector]
@@ -367,10 +385,10 @@ def int_after_colon(value):
 # ---vvv---
 
 
-def make_lumi_plot(plot, data, cols, timerange, single_bunch=None):
+def make_lumi_plot(plot, data, cols, timerange, unit, single_bunch=None):
     log.info('making lumi plot')
     plot_by_columns(plot, data, cols, 'online')
-    plot.set_ylabel('lumi (hz/b)')
+    plot.set_ylabel('lumi (' + unit + ')')
     ylims = plot.get_ylim()
     if ylims[0] < LUMI_BOTTOM_YLIMIT:
         plot.set_ylim(bottom=LUMI_BOTTOM_YLIMIT)
@@ -420,7 +438,7 @@ def make_correlation_plot(plot, data, x, y):
     plot.set_title('Correlation')
     plot.grid(True)
 
-def make_bunch_plot(plot, data, cols, timerange, name, threshold):
+def make_bunch_plot(plot, data, cols, timerange, name, threshold, unit='hz/ub'):
 
     def filter_by_percentage_of_max(row):
         rmax = row.max()
@@ -433,7 +451,7 @@ def make_bunch_plot(plot, data, cols, timerange, name, threshold):
     log.info('creating plot')
     log.info('plotting by bunch')
     plot_by_columns(plot, data, cols, legend=False)
-    plot.set_ylabel('bxdelivered (hz/b)')
+    plot.set_ylabel('bxdelivered (' + unit + ')')
 
     plot.set_title(name + ' per bunch. ' +
                    get_title_timerange_part(timerange, data) +
@@ -556,6 +574,11 @@ def separate_chunks_on_plot(subplot, data, chunk='run'):
                             alpha=BG_STRIPE_ALPHA)
 
         put_bg_switch = not put_bg_switch
+
+
+def reset_color_cycle():
+    global COLORS
+    COLORS = itertools.cycle(COLOR_LIST)
 
 
 if __name__ == '__main__':
